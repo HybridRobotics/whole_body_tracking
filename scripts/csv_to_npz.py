@@ -1,47 +1,71 @@
-"""This script replay a motion from a csv file and output it to a npz file
+"""Replay a motion from CSV and save as NPZ (local by default; optional W&B upload)
 
-.. code-block:: bash
+Usage examples:
 
-    # Usage
-    python csv_to_npz.py --input_file LAFAN/dance1_subject2.csv --input_fps 30 --frame_range 122 722 \
-    --output_file ./motions/dance1_subject2.npz --output_fps 50
+# 只转本地（推荐）
+python csv_to_npz.py \
+  --input_file LAFAN/dance1_subject2.csv --input_fps 30 --frame_range 122 722 \
+  --output_file ./motions/dance1_subject2.npz --output_fps 50 --headless
+
+# 转本地 + 上传到 W&B 项目（不关联 registry）
+python csv_to_npz.py \
+  --input_file LAFAN/dance1_subject2.csv --output_file ./motions/dance1_subject2.npz \
+  --upload_wandb --log_project_name csv_to_npz --run_name dance1_subject2 --headless
+
+# 转本地 + 上传到 W&B 并尝试关联 registry（只有你已在 UI 里创建好自定义 registry 才能成功）
+python csv_to_npz.py \
+  --input_file LAFAN/dance1_subject2.csv --output_file ./motions/dance1_subject2.npz \
+  --upload_wandb --log_project_name csv_to_npz --run_name dance1_subject2 \
+  --registry_name xboninglix-technical-university-of-munich-org/wandb-registry-motions/dance1_subject2 \
+  --headless
 """
 
-"""Launch Isaac Sim Simulator first."""
-
 import argparse
+import os
+import pathlib
 import numpy as np
 
 from isaaclab.app import AppLauncher
 
-# add argparse arguments
+# -------------------------
+# CLI
+# -------------------------
 parser = argparse.ArgumentParser(description="Replay motion from csv file and output to npz file.")
-parser.add_argument("--input_file", type=str, required=True, help="The path to the input motion csv file.")
-parser.add_argument("--input_fps", type=int, default=30, help="The fps of the input motion.")
+parser.add_argument("--input_file", type=str, required=True, help="Path to the input motion CSV.")
+parser.add_argument("--input_fps", type=int, default=30, help="FPS of the input motion (CSV).")
 parser.add_argument(
     "--frame_range",
     nargs=2,
     type=int,
     metavar=("START", "END"),
-    help=(
-        "frame range: START END (both inclusive). The frame index starts from 1. If not provided, all frames will be"
-        " loaded."
-    ),
+    help=("Frame range START END (inclusive), 1-based index. If not set, load all frames."),
 )
-parser.add_argument("--output_name", type=str, required=True, help="The name of the motion npz file.")
-parser.add_argument("--output_fps", type=int, default=50, help="The fps of the output motion.")
+parser.add_argument("--output_file", type=str, required=True, help="Path to save the output NPZ.")
+parser.add_argument("--output_fps", type=int, default=50, help="FPS of the output motion.")
+# 可选：上传到 W&B
+parser.add_argument("--upload_wandb", action="store_true", help="Upload the saved NPZ to Weights & Biases.")
+parser.add_argument("--log_project_name", type=str, default="csv_to_npz", help="W&B project name.")
+parser.add_argument("--run_name", type=str, default=None, help="W&B run name (default: stem of output_file).")
+parser.add_argument(
+    "--registry_name",
+    type=str,
+    default=None,
+    help=("Optional W&B registry path to link, e.g. "
+          "xboninglix-technical-university-of-munich-org/wandb-registry-motions/dance1_subject2 "
+          "(requires registry pre-created in UI)."),
+)
 
-# append AppLauncher cli args
+# 让 AppLauncher 添加它自己的参数（例如 --headless, --renderer 等）
 AppLauncher.add_app_launcher_args(parser)
-# parse the arguments
 args_cli = parser.parse_args()
 
-# launch omniverse app
+# 启动 Omniverse
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
-"""Rest everything follows."""
-
+# -------------------------
+# Imports 依赖 IsaacLab
+# -------------------------
 import torch
 
 import isaaclab.sim as sim_utils
@@ -52,20 +76,14 @@ from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.utils.math import axis_angle_from_quat, quat_conjugate, quat_mul, quat_slerp
 
-##
-# Pre-defined configs
-##
+# 机器人配置
 from whole_body_tracking.robots.g1 import G1_CYLINDER_CFG
 
 
 @configclass
 class ReplayMotionsSceneCfg(InteractiveSceneCfg):
     """Configuration for a replay motions scene."""
-
-    # ground plane
     ground = AssetBaseCfg(prim_path="/World/defaultGroundPlane", spawn=sim_utils.GroundPlaneCfg())
-
-    # lights
     sky_light = AssetBaseCfg(
         prim_path="/World/skyLight",
         spawn=sim_utils.DomeLightCfg(
@@ -73,8 +91,6 @@ class ReplayMotionsSceneCfg(InteractiveSceneCfg):
             texture_file=f"{ISAAC_NUCLEUS_DIR}/Materials/Textures/Skies/PolyHaven/kloofendal_43d_clear_puresky_4k.hdr",
         ),
     )
-
-    # articulation
     robot: ArticulationCfg = G1_CYLINDER_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
 
@@ -115,12 +131,13 @@ class MotionLoader:
         motion = motion.to(torch.float32).to(self.device)
         self.motion_base_poss_input = motion[:, :3]
         self.motion_base_rots_input = motion[:, 3:7]
-        self.motion_base_rots_input = self.motion_base_rots_input[:, [3, 0, 1, 2]]  # convert to wxyz
+        # convert to wxyz
+        self.motion_base_rots_input = self.motion_base_rots_input[:, [3, 0, 1, 2]]
         self.motion_dof_poss_input = motion[:, 7:]
 
         self.input_frames = motion.shape[0]
-        self.duration = (self.input_frames - 1) * self.input_dt
-        print(f"Motion loaded ({self.motion_file}), duration: {self.duration} sec, frames: {self.input_frames}")
+        self.duration = max((self.input_frames - 1) * self.input_dt, 1e-6)
+        print(f"Motion loaded ({self.motion_file}), duration: {self.duration:.4f}s, frames: {self.input_frames}")
 
     def _interpolate_motion(self):
         """Interpolates the motion to the output fps."""
@@ -143,62 +160,42 @@ class MotionLoader:
             blend.unsqueeze(1),
         )
         print(
-            f"Motion interpolated, input frames: {self.input_frames}, input fps: {self.input_fps}, output frames:"
-            f" {self.output_frames}, output fps: {self.output_fps}"
+            f"Motion interpolated, input frames: {self.input_frames} @ {self.input_fps}Hz -> "
+            f"output frames: {self.output_frames} @ {self.output_fps}Hz"
         )
 
     def _lerp(self, a: torch.Tensor, b: torch.Tensor, blend: torch.Tensor) -> torch.Tensor:
-        """Linear interpolation between two tensors."""
         return a * (1 - blend) + b * blend
 
     def _slerp(self, a: torch.Tensor, b: torch.Tensor, blend: torch.Tensor) -> torch.Tensor:
-        """Spherical linear interpolation between two quaternions."""
         slerped_quats = torch.zeros_like(a)
         for i in range(a.shape[0]):
             slerped_quats[i] = quat_slerp(a[i], b[i], blend[i])
         return slerped_quats
 
-    def _compute_frame_blend(self, times: torch.Tensor) -> torch.Tensor:
-        """Computes the frame blend for the motion."""
+    def _compute_frame_blend(self, times: torch.Tensor):
         phase = times / self.duration
-        index_0 = (phase * (self.input_frames - 1)).floor().long()
-        index_1 = torch.minimum(index_0 + 1, torch.tensor(self.input_frames - 1))
-        blend = phase * (self.input_frames - 1) - index_0
-        return index_0, index_1, blend
+        idx0 = (phase * (self.input_frames - 1)).floor().long()
+        idx1 = torch.minimum(idx0 + 1, torch.tensor(self.input_frames - 1, device=times.device))
+        blend = phase * (self.input_frames - 1) - idx0
+        return idx0, idx1, blend
 
     def _compute_velocities(self):
-        """Computes the velocities of the motion."""
         self.motion_base_lin_vels = torch.gradient(self.motion_base_poss, spacing=self.output_dt, dim=0)[0]
         self.motion_dof_vels = torch.gradient(self.motion_dof_poss, spacing=self.output_dt, dim=0)[0]
         self.motion_base_ang_vels = self._so3_derivative(self.motion_base_rots, self.output_dt)
 
     def _so3_derivative(self, rotations: torch.Tensor, dt: float) -> torch.Tensor:
-        """Computes the derivative of a sequence of SO3 rotations.
-
-        Args:
-            rotations: shape (B, 4).
-            dt: time step.
-        Returns:
-            shape (B, 3).
-        """
+        """Derivative on SO(3) using finite difference of relative rotations."""
+        if rotations.shape[0] < 3:
+            return torch.zeros((rotations.shape[0], 3), device=rotations.device, dtype=rotations.dtype)
         q_prev, q_next = rotations[:-2], rotations[2:]
-        q_rel = quat_mul(q_next, quat_conjugate(q_prev))  # shape (B−2, 4)
-
-        omega = axis_angle_from_quat(q_rel) / (2.0 * dt)  # shape (B−2, 3)
-        omega = torch.cat([omega[:1], omega, omega[-1:]], dim=0)  # repeat first and last sample
+        q_rel = quat_mul(q_next, quat_conjugate(q_prev))
+        omega = axis_angle_from_quat(q_rel) / (2.0 * dt)
+        omega = torch.cat([omega[:1], omega, omega[-1:]], dim=0)
         return omega
 
-    def get_next_state(
-        self,
-    ) -> tuple[
-        torch.Tensor,
-        torch.Tensor,
-        torch.Tensor,
-        torch.Tensor,
-        torch.Tensor,
-        torch.Tensor,
-    ]:
-        """Gets the next state of the motion."""
+    def get_next_state(self):
         state = (
             self.motion_base_poss[self.current_idx : self.current_idx + 1],
             self.motion_base_rots[self.current_idx : self.current_idx + 1],
@@ -223,7 +220,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, joi
         input_fps=args_cli.input_fps,
         output_fps=args_cli.output_fps,
         device=sim.device,
-        frame_range=args_cli.frame_range,
+        frame_range=tuple(args_cli.frame_range) if args_cli.frame_range else None,
     )
 
     # Extract scene entities
@@ -272,12 +269,15 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, joi
         joint_pos[:, robot_joint_indexes] = motion_dof_pos
         joint_vel[:, robot_joint_indexes] = motion_dof_vel
         robot.write_joint_state_to_sim(joint_pos, joint_vel)
-        sim.render()  # We don't want physic (sim.step())
+
+        # 仅渲染，不步进物理
+        sim.render()
         scene.update(sim.get_physics_dt())
 
         pos_lookat = root_states[0, :3].cpu().numpy()
         sim.set_camera_view(pos_lookat + np.array([2.0, 2.0, 0.5]), pos_lookat)
 
+        # 采样并缓存一遍序列
         if not file_saved:
             log["joint_pos"].append(robot.data.joint_pos[0, :].cpu().numpy().copy())
             log["joint_vel"].append(robot.data.joint_vel[0, :].cpu().numpy().copy())
@@ -298,17 +298,28 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, joi
             ):
                 log[k] = np.stack(log[k], axis=0)
 
-            np.savez("/tmp/motion.npz", **log)
+            # ---- 保存到本地 ----
+            out_path = pathlib.Path(args_cli.output_file).expanduser().resolve()
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            np.savez(out_path, **log)
+            print(f"[INFO]: Motion saved locally: {out_path}")
 
-            import wandb
-
-            COLLECTION = args_cli.output_name
-            run = wandb.init(project="csv_to_npz", name=COLLECTION)
-            print(f"[INFO]: Logging motion to wandb: {COLLECTION}")
-            REGISTRY = "motions"
-            logged_artifact = run.log_artifact(artifact_or_path="/tmp/motion.npz", name=COLLECTION, type=REGISTRY)
-            run.link_artifact(artifact=logged_artifact, target_path=f"wandb-registry-{REGISTRY}/{COLLECTION}")
-            print(f"[INFO]: Motion saved to wandb registry: {REGISTRY}/{COLLECTION}")
+            # ---- 可选：上传到 W&B（不再强制）----
+            if args_cli.upload_wandb:
+                try:
+                    import wandb
+                    run_name = args_cli.run_name or out_path.stem
+                    run = wandb.init(project=args_cli.log_project_name, name=run_name)
+                    print(f"[INFO]: Logging motion to W&B: {run_name}")
+                    logged_artifact = run.log_artifact(
+                        artifact_or_path=str(out_path), name=run_name, type="motions"
+                    )
+                    if args_cli.registry_name:
+                        # 只有在 UI 里先建好自定义 registry 才能成功；否则会 404
+                        run.link_artifact(artifact=logged_artifact, target_path=args_cli.registry_name)
+                        print(f"[INFO]: Linked to registry: {args_cli.registry_name}")
+                except Exception as e:
+                    print(f"[WARN]: W&B upload/link skipped due to error: {e}")
 
 
 def main():
@@ -320,9 +331,8 @@ def main():
     # Design scene
     scene_cfg = ReplayMotionsSceneCfg(num_envs=1, env_spacing=2.0)
     scene = InteractiveScene(scene_cfg)
-    # Play the simulator
+    # Ready
     sim.reset()
-    # Now we are ready!
     print("[INFO]: Setup complete...")
     # Run the simulator
     run_simulator(
@@ -363,7 +373,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # run the main function
     main()
-    # close sim app
     simulation_app.close()
