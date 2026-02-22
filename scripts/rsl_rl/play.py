@@ -4,7 +4,7 @@
 
 import argparse
 import sys
-
+import ipdb
 from isaaclab.app import AppLauncher
 
 # local imports
@@ -78,9 +78,27 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         run_path = args_cli.wandb_path
 
         api = wandb.Api()
+        # ipdb.set_trace()
         if "model" in args_cli.wandb_path:
             run_path = "/".join(args_cli.wandb_path.split("/")[:-1])
-        wandb_run = api.run(run_path)
+        
+        # Try to get run directly, if fails, search by run name
+        try:
+            wandb_run = api.run(run_path)
+        except (Exception,) as e:
+            # run_path might be entity/project/run_name, try to find by name
+            parts = run_path.split("/")
+            if len(parts) == 3:
+                entity, project, run_name = parts
+                print(f"[INFO] Searching for run with name: {run_name}")
+                runs = api.runs(f"{entity}/{project}", filters={"display_name": run_name})
+                runs_list = list(runs)
+                if len(runs_list) == 0:
+                    raise ValueError(f"Could not find run with name '{run_name}' in {entity}/{project}")
+                wandb_run = runs_list[0]
+                print(f"[INFO] Found run: {wandb_run.id}")
+            else:
+                raise
         # loop over files in the run
         files = [file.name for file in wandb_run.files() if "model" in file.name]
         # files are all model_xxx.pt find the largest filename
@@ -88,7 +106,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             file = args_cli.wandb_path.split("/")[-1]
         else:
             file = max(files, key=lambda x: int(x.split("_")[1].split(".")[0]))
-
+        # ipdb.set_trace()
         wandb_file = wandb_run.file(str(file))
         wandb_file.download("./logs/rsl_rl/temp", replace=True)
 
@@ -106,6 +124,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             env_cfg.commands.motion.motion_file = str(pathlib.Path(art.download()) / "motion.npz")
 
     else:
+        if args_cli.motion_file is not None:
+            print(f"[INFO]: Using motion file from CLI: {args_cli.motion_file}")
+            env_cfg.commands.motion.motion_file = args_cli.motion_file
         print(f"[INFO] Loading experiment from directory: {log_root_path}")
         resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
@@ -147,13 +168,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     export_motion_policy_as_onnx(
         env.unwrapped,
         ppo_runner.alg.policy,
-        normalizer=ppo_runner.obs_normalizer,
+        normalizer=ppo_runner.alg.policy.actor_obs_normalizer,
         path=export_model_dir,
         filename="policy.onnx",
     )
     attach_onnx_metadata(env.unwrapped, args_cli.wandb_path if args_cli.wandb_path else "none", export_model_dir)
     # reset environment
-    obs, _ = env.get_observations()
+    obs = env.get_observations()
     timestep = 0
     # simulate environment
     while simulation_app.is_running():
