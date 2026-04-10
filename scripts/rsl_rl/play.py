@@ -20,6 +20,9 @@ parser.add_argument(
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--motion_file", type=str, default=None, help="Path to the motion file.")
+# parser.add_argument("--motion_file", type=str, required=True, help="Path to the motion file.")
+# parser.add_argument("--resume_path", type=str, required=True, help="Path to the trained model checkpoint.")
+
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -104,11 +107,29 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             print("[WARN] No model artifact found in the run.")
         else:
             env_cfg.commands.motion.motion_file = str(pathlib.Path(art.download()) / "motion.npz")
+    # env_cfg.commands.motion.motion_file = "/home/wenconggan/whole_body_tracking/motion/chars.npz"
+    # resume_path = "/home/wenconggan/whole_body_tracking/logs/rsl_rl/x2_flat/2025-09-01_11-17-33/model_4000.pt"
 
-    else:
-        print(f"[INFO] Loading experiment from directory: {log_root_path}")
-        resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
-        print(f"[INFO]: Loading model checkpoint from: {resume_path}")
+    if args_cli.motion_file is not None:
+        env_cfg.commands.motion.motion_file = args_cli.motion_file
+
+    print(f"[INFO] Loading experiment from directory: {log_root_path}")
+    resume_path = None
+    if agent_cfg.load_checkpoint is not None:
+        potential_path = agent_cfg.load_checkpoint
+        if os.path.isabs(potential_path) or os.sep in potential_path:
+            if os.path.isfile(potential_path):
+                resume_path = os.path.abspath(potential_path)
+            else:
+                raise FileNotFoundError(f"Checkpoint file not found: {potential_path}")
+
+    if resume_path is None:
+        run_dir_expr = agent_cfg.load_run if isinstance(agent_cfg.load_run, str) and len(agent_cfg.load_run) > 0 else ".*"
+        checkpoint_expr = (
+            agent_cfg.load_checkpoint if (isinstance(agent_cfg.load_checkpoint, str) and os.sep not in agent_cfg.load_checkpoint)
+            else ".*"
+        )
+        resume_path = get_checkpoint_path(log_root_path, run_dir_expr, checkpoint_expr)
 
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
@@ -143,17 +164,24 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # export policy to onnx/jit
     export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
+    exported_policy_name = resume_path.split('/')[-1]
+    exported_onnx_name = exported_policy_name.replace('.pt', '.onnx')
 
     export_motion_policy_as_onnx(
         env.unwrapped,
         ppo_runner.alg.policy,
-        normalizer=ppo_runner.obs_normalizer,
+        # normalizer=ppo_runner.obs_normalizer,
+        # 修复方案：通过 ppo_runner.alg 访问
+        # 注意：在 RSL-RL 中，通常是 .alg
+        # 修复方案：尝试获取，如果不存在则设为 None
+        normalizer=getattr(ppo_runner.alg, "obs_normalizer", None),
         path=export_model_dir,
-        filename="policy.onnx",
+        filename=exported_onnx_name,
     )
-    attach_onnx_metadata(env.unwrapped, args_cli.wandb_path if args_cli.wandb_path else "none", export_model_dir)
+    attach_onnx_metadata(env.unwrapped, args_cli.wandb_path if args_cli.wandb_path else "none", export_model_dir,exported_onnx_name)
     # reset environment
-    obs, _ = env.get_observations()
+    # obs, _ = env.get_observations()
+    obs= env.get_observations()
     timestep = 0
     # simulate environment
     while simulation_app.is_running():

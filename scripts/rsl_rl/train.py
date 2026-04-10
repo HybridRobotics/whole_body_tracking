@@ -3,7 +3,12 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Script to train RL agent with RSL-RL."""
+"""Script to train RL agent with RSL-RL.
+
+python scripts/rsl_rl/train.py --task=Tracking-Flat-PI-Plus-Wo-v0 --motion_file source/motion/tienkung_lite/npz/{motion_name}.npz --headless --log_project_name
+#若不想使用wandb，可以去掉 --logger wandb
+#继续训练 --resume {load_run_name}
+"""
 
 """Launch Isaac Sim Simulator first."""
 
@@ -17,6 +22,12 @@ import cli_args  # isort: skip
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
+parser.add_argument("--motion_file",type=str,default=None,help="Path to the motion file (e.g., .npz) to load.")
+parser.add_argument("--motion_files", type=str, nargs="+", default=None,
+                    help="Paths to multiple motion files for multi-motion training.")
+parser.add_argument("--motion_selector", type=str, default="uniform",
+                    choices=["uniform", "adaptive", "curriculum"],
+                    help="Motion selection strategy for multi-motion training.")
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
 parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
 parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (in steps).")
@@ -24,7 +35,7 @@ parser.add_argument("--num_envs", type=int, default=None, help="Number of enviro
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
 parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
-parser.add_argument("--registry_name", type=str, required=True, help="The name of the wand registry.")
+parser.add_argument("--registry_name", type=str, required=False, help="The name of the wand registry.")
 
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
@@ -58,7 +69,8 @@ from isaaclab.envs import (
     multi_agent_to_single_agent,
 )
 from isaaclab.utils.dict import print_dict
-from isaaclab.utils.io import dump_pickle, dump_yaml
+# from isaaclab.utils.io import dump_pickle
+from isaaclab.utils.io import dump_yaml
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
 from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
@@ -82,23 +94,40 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     agent_cfg.max_iterations = (
         args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg.max_iterations
     )
+    # TODO: modify the default motion file
+    env_cfg.commands.motion.motion_file = args_cli.motion_file if args_cli.motion_file else None
+
+    # Multi-motion: inject motion_files list and selector type when provided
+    if args_cli.motion_files is not None:
+        from whole_body_tracking.tasks.tracking.mdp.commands import MultiMotionCommandCfg
+        if isinstance(env_cfg.commands.motion, MultiMotionCommandCfg):
+            env_cfg.commands.motion.motion_files = args_cli.motion_files
+            env_cfg.commands.motion.motion_selector_type = args_cli.motion_selector
+            print(f"[INFO] Multi-motion training with {len(args_cli.motion_files)} motions "
+                  f"(selector: {args_cli.motion_selector})")
+        else:
+            # Fallback: single-motion env gets the first file
+            env_cfg.commands.motion.motion_file = args_cli.motion_files[0]
+            print(f"[WARN] --motion_files provided but env uses single-motion config. "
+                  f"Using first file: {args_cli.motion_files[0]}")
 
     # set the environment seed
     # note: certain randomizations occur in the environment initialization so we set the seed here
     env_cfg.seed = agent_cfg.seed
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
 
-    # load the motion file from the wandb registry
+    # load the motion file from the wandb registry (only when --registry_name is provided)
     registry_name = args_cli.registry_name
-    if ":" not in registry_name:  # Check if the registry name includes alias, if not, append ":latest"
-        registry_name += ":latest"
-    import pathlib
+    if registry_name is not None:
+        if ":" not in registry_name:  # Check if the registry name includes alias, if not, append ":latest"
+            registry_name += ":latest"
+        import pathlib
 
-    import wandb
+        import wandb
 
-    api = wandb.Api()
-    artifact = api.artifact(registry_name)
-    env_cfg.commands.motion.motion_file = str(pathlib.Path(artifact.download()) / "motion.npz")
+        api = wandb.Api()
+        artifact = api.artifact(registry_name)
+        env_cfg.commands.motion.motion_file = str(pathlib.Path(artifact.download()) / "motion.npz")
 
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
@@ -133,7 +162,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # create runner from rsl-rl
     runner = OnPolicyRunner(
-        env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device, registry_name=registry_name
+        env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device
     )
     # write git state to logs
     runner.add_git_repo_to_log(__file__)
@@ -148,8 +177,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # dump the configuration into log-directory
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
-    dump_pickle(os.path.join(log_dir, "params", "env.pkl"), env_cfg)
-    dump_pickle(os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
+    # dump_pickle(os.path.join(log_dir, "params", "env.pkl"), env_cfg)
+    # dump_pickle(os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
 
     # run training
     runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)

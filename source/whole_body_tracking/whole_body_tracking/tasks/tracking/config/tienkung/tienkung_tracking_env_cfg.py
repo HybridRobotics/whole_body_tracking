@@ -29,7 +29,7 @@ from whole_body_tracking.tasks.tracking.tracking_env_cfg import RewardsCfg, Term
 
 
 @configclass
-class WalkerEventCfg(EventCfg):
+class TienkungEventCfg(EventCfg):
     base_com = EventTerm(
         func=mdp.randomize_rigid_body_com,
         mode="startup",                              # 启动时执行
@@ -45,7 +45,7 @@ class WalkerEventCfg(EventCfg):
 
 
 @configclass
-class WalkerRewardsCfg(RewardsCfg):
+class TienkungRewardsCfg(RewardsCfg):
     undesired_contacts = RewTerm(
         func=mdp.undesired_contacts,
         weight=-0.1,  # 接触惩罚权重
@@ -54,7 +54,7 @@ class WalkerRewardsCfg(RewardsCfg):
                 "contact_forces",
                 body_names=[
                     # 正则表达式：排除脚踝和手腕的所有body
-                    r"^(?!ankle_roll_l_link$)(?!ankle_roll_r_link$)(?!wrist_roll_l_link)(?!wrist_roll_r_link).+$"
+                    r"^(?!ankle_roll_l_link$)(?!ankle_roll_r_link$)(?!elbow_pitch_l_link)(?!elbow_pitch_r_link).+$"
                 ],
             ),
             "threshold": 1.0,  # 接触力阈值(N)
@@ -63,7 +63,7 @@ class WalkerRewardsCfg(RewardsCfg):
 
 
 @configclass
-class WalkerTerminationsCfg(TerminationsCfg):
+class TienkungTerminationsCfg(TerminationsCfg):
     ee_body_pos = DoneTerm(
         func=mdp.bad_motion_body_pos_z_only,
         params={
@@ -72,8 +72,8 @@ class WalkerTerminationsCfg(TerminationsCfg):
             "body_names": [                   # 监控的末端执行器
                 "ankle_roll_l_link",       # 左脚踝
                 "ankle_roll_r_link",      # 右脚踝
-                "wrist_roll_l_link",        # 左手腕
-                "wrist_roll_r_link",       # 右手腕
+                "elbow_pitch_l_link",        # 左手腕
+                "elbow_pitch_r_link",       # 右手腕
             ],
         },
     )  # 末端执行器位置偏差过大终止
@@ -86,9 +86,9 @@ class WalkerTerminationsCfg(TerminationsCfg):
 
 
 @configclass
-class WalkerTrackingEnvCfg(TrackingEnvCfg):
+class TienkungTrackingEnvCfg(TrackingEnvCfg):
 
     # MDP行为定义
-    rewards: WalkerRewardsCfg = WalkerRewardsCfg()                  # 奖励函数配置
-    terminations: WalkerTerminationsCfg = WalkerTerminationsCfg()   # 终止条件配置
-    events: WalkerEventCfg = WalkerEventCfg()                       # 随机化事件配置
+    rewards: TienkungRewardsCfg = TienkungRewardsCfg()                  # 奖励函数配置
+    terminations: TienkungTerminationsCfg = TienkungTerminationsCfg()   # 终止条件配置
+    events: TienkungEventCfg = TienkungEventCfg()                       # 随机化事件配置

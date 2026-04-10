@@ -3,11 +3,11 @@ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, R
 
 
 @configclass
-class G1FlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
+class WalkerFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
-    max_iterations = 30000
+    max_iterations = 50000
     save_interval = 500
-    experiment_name = "g1_flat"
+    experiment_name = "walker_flat"
     empirical_normalization = True
     policy = RslRlPpoActorCriticCfg(
         init_noise_std=1.0,
@@ -35,7 +35,7 @@ LOW_FREQ_SCALE = 0.5
 
 
 @configclass
-class G1FlatLowFreqPPORunnerCfg(G1FlatPPORunnerCfg):
+class WalkerFlatLowFreqPPORunnerCfg(WalkerFlatPPORunnerCfg):
     def __post_init__(self):
         super().__post_init__()
         self.num_steps_per_env = round(self.num_steps_per_env * LOW_FREQ_SCALE)

@@ -16,7 +16,10 @@ from isaaclab.app import AppLauncher
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Replay converted motions.")
-parser.add_argument("--registry_name", type=str, required=True, help="The name of the wand registry.")
+parser.add_argument("--robot", type=str, choices=["unitree_g1", "tienkung", "walker"], required=True,
+                   help="Robot type: unitree_g1, tienkung， walker")
+parser.add_argument("--registry_name", type=str, help="The name of the wand registry.")
+parser.add_argument("--motion_file", type=str, help="Local motion NPZ file path")
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -39,8 +42,26 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 ##
 # Pre-defined configs
 ##
+from whole_body_tracking.robots.walker import WALKER_CFG
 from whole_body_tracking.robots.g1 import G1_CYLINDER_CFG
+from whole_body_tracking.robots.tienkung import TIENKUNG_CFG
 from whole_body_tracking.tasks.tracking.mdp import MotionLoader
+
+# Robot configurations
+ROBOT_CONFIGS = {
+    "unitree_g1": {
+        "cfg": G1_CYLINDER_CFG,
+        "name": "unitree_g1"
+    },
+    "tienkung": {
+        "cfg": TIENKUNG_CFG,
+        "name": "tienkung"
+    },
+    "walker": {
+        "cfg": WALKER_CFG,
+        "name": "walker"
+    }
+}
 
 
 @configclass
@@ -57,8 +78,8 @@ class ReplayMotionsSceneCfg(InteractiveSceneCfg):
         ),
     )
 
-    # articulation
-    robot: ArticulationCfg = G1_CYLINDER_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+    # articulation (will be set dynamically based on robot type)
+    robot: ArticulationCfg = None
 
 
 def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
@@ -67,16 +88,24 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
     # Define simulation stepping
     sim_dt = sim.get_physics_dt()
 
-    registry_name = args_cli.registry_name
-    if ":" not in registry_name:  # Check if the registry name includes alias, if not, append ":latest"
-        registry_name += ":latest"
-    import pathlib
+    # Support both local file and WandB registry
+    if args_cli.motion_file:
+        motion_file = args_cli.motion_file
+        print(f"[INFO]: Using local motion file: {motion_file}")
+    else:
+        if not args_cli.registry_name:
+            raise ValueError("Either --motion_file or --registry_name must be provided")
 
-    import wandb
+        registry_name = args_cli.registry_name
+        if ":" not in registry_name:  # Check if the registry name includes alias, if not, append ":latest"
+            registry_name += ":latest"
+        import pathlib
+        import wandb
 
-    api = wandb.Api()
-    artifact = api.artifact(registry_name)
-    motion_file = str(pathlib.Path(artifact.download()) / "motion.npz")
+        api = wandb.Api()
+        artifact = api.artifact(registry_name)
+        motion_file = str(pathlib.Path(artifact.download()) / "motion.npz")
+        print(f"[INFO]: Using WandB motion file: {registry_name}")
 
     motion = MotionLoader(
         motion_file,
@@ -108,13 +137,21 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
 
 
 def main():
+    # Get robot configuration
+    robot_config = ROBOT_CONFIGS[args_cli.robot]
+    print(f"[INFO]: Using robot configuration: {args_cli.robot} ({robot_config['name']})")
+
     sim_cfg = sim_utils.SimulationCfg(device=args_cli.device)
     sim_cfg.dt = 0.02
     sim = SimulationContext(sim_cfg)
 
+    # Design scene with robot-specific configuration
     scene_cfg = ReplayMotionsSceneCfg(num_envs=1, env_spacing=2.0)
+    scene_cfg.robot = robot_config["cfg"].replace(prim_path="{ENV_REGEX_NS}/Robot")
     scene = InteractiveScene(scene_cfg)
+
     sim.reset()
+    print(f"[INFO]: Setup complete for {robot_config['name']} robot...")
     # Run the simulator
     run_simulator(sim, scene)
 

@@ -31,6 +31,11 @@ class G1FlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     )
 
 
+@configclass
+class G1MultiMotionPPORunnerCfg(G1FlatPPORunnerCfg):
+    experiment_name = "g1_multimotion"
+
+
 LOW_FREQ_SCALE = 0.5
 
 

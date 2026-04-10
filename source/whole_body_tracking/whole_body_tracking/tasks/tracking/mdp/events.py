@@ -8,6 +8,10 @@ from isaaclab.assets import Articulation
 from isaaclab.envs.mdp.events import _randomize_prop_by_op
 from isaaclab.managers import SceneEntityCfg
 
+""""
+域随机化，关节初始位置随机化和刚体重心随机化
+"""
+
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
 
