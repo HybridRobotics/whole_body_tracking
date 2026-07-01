@@ -13,7 +13,7 @@ class MyOnPolicyRunner(OnPolicyRunner):
     def save(self, path: str, infos=None):
         """Save the model and training information."""
         super().save(path, infos)
-        if self.logger_type in ["wandb"]:
+        if getattr(self, "logger_type", None) in ["wandb"]:
             policy_path = path.split("model")[0]
             filename = policy_path.split("/")[-2] + ".onnx"
             export_policy_as_onnx(self.alg.policy, normalizer=self.obs_normalizer, path=policy_path, filename=filename)
@@ -31,7 +31,7 @@ class MotionOnPolicyRunner(OnPolicyRunner):
     def save(self, path: str, infos=None):
         """Save the model and training information."""
         super().save(path, infos)
-        if self.logger_type in ["wandb"]:
+        if getattr(self, "logger_type", None) in ["wandb"]:
             policy_path = path.split("model")[0]
             filename = policy_path.split("/")[-2] + ".onnx"
             export_motion_policy_as_onnx(

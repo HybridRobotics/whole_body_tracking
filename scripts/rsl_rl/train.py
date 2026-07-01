@@ -58,7 +58,8 @@ from isaaclab.envs import (
     multi_agent_to_single_agent,
 )
 from isaaclab.utils.dict import print_dict
-from isaaclab.utils.io import dump_pickle, dump_yaml
+from isaaclab.utils.io import dump_yaml
+import pickle
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
 from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
@@ -132,8 +133,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env = RslRlVecEnvWrapper(env)
 
     # create runner from rsl-rl
+    agent_cfg_dict = agent_cfg.to_dict()
+    # Remove deprecated kwargs that rsl_rl >= 5.0.0 rejects
+    for key in ["stochastic", "init_noise_std", "noise_std_type", "state_dependent_std"]:
+        agent_cfg_dict.get("actor", {}).pop(key, None)
+        agent_cfg_dict.get("critic", {}).pop(key, None)
+        agent_cfg_dict.get("policy", {}).get("actor", {}).pop(key, None)
+        agent_cfg_dict.get("policy", {}).get("critic", {}).pop(key, None)
+
     runner = OnPolicyRunner(
-        env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device, registry_name=registry_name
+        env, agent_cfg_dict, log_dir=log_dir, device=agent_cfg.device, registry_name=registry_name
     )
     # write git state to logs
     runner.add_git_repo_to_log(__file__)
@@ -148,8 +157,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # dump the configuration into log-directory
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
-    dump_pickle(os.path.join(log_dir, "params", "env.pkl"), env_cfg)
-    dump_pickle(os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
+    with open(os.path.join(log_dir, "params", "env.pkl"), "wb") as f:
+        pickle.dump(env_cfg, f)
+    with open(os.path.join(log_dir, "params", "agent.pkl"), "wb") as f:
+        pickle.dump(agent_cfg, f)
 
     # run training
     runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
