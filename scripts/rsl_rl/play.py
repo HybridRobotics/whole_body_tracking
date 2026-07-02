@@ -135,7 +135,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env = RslRlVecEnvWrapper(env)
 
     # load previously trained model
-    ppo_runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+    agent_cfg_dict = agent_cfg.to_dict()
+    for key in ["stochastic", "init_noise_std", "noise_std_type", "state_dependent_std"]:
+        agent_cfg_dict.get("actor", {}).pop(key, None)
+        agent_cfg_dict.get("critic", {}).pop(key, None)
+        agent_cfg_dict.get("policy", {}).get("actor", {}).pop(key, None)
+        agent_cfg_dict.get("policy", {}).get("critic", {}).pop(key, None)
+
+    ppo_runner = OnPolicyRunner(env, agent_cfg_dict, log_dir=None, device=agent_cfg.device)
     ppo_runner.load(resume_path)
 
     # obtain the trained policy for inference
@@ -144,16 +151,19 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # export policy to onnx/jit
     export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
 
+    # In rsl_rl >= 5.0.0, alg no longer has 'policy', it has 'actor' and 'critic'.
+    # The exporter expects an object with .actor and .is_recurrent
+    ppo_runner.alg.is_recurrent = getattr(ppo_runner.alg.actor, "is_recurrent", False)
     export_motion_policy_as_onnx(
         env.unwrapped,
-        ppo_runner.alg.policy,
-        normalizer=ppo_runner.obs_normalizer,
+        ppo_runner.alg,
+        normalizer=getattr(ppo_runner.alg.actor, "obs_normalizer", None),
         path=export_model_dir,
         filename="policy.onnx",
     )
     attach_onnx_metadata(env.unwrapped, args_cli.wandb_path if args_cli.wandb_path else "none", export_model_dir)
     # reset environment
-    obs, _ = env.get_observations()
+    obs = env.get_observations()
     timestep = 0
     # simulate environment
     while simulation_app.is_running():

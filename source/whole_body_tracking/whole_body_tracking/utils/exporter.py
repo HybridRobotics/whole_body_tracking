@@ -43,8 +43,16 @@ class _OnnxMotionPolicyExporter(_OnnxPolicyExporter):
 
     def forward(self, x, time_step):
         time_step_clamped = torch.clamp(time_step.long().squeeze(-1), max=self.time_step_total - 1)
+        
+        x_norm = self.normalizer(x)
+        if hasattr(self.actor, "obs_groups"):
+            obs_dict = {self.actor.obs_groups[0]: x_norm}
+            action = self.actor(obs_dict)
+        else:
+            action = self.actor(x_norm)
+            
         return (
-            self.actor(self.normalizer(x)),
+            action,
             self.joint_pos[time_step_clamped],
             self.joint_vel[time_step_clamped],
             self.body_pos_w[time_step_clamped],
@@ -55,7 +63,13 @@ class _OnnxMotionPolicyExporter(_OnnxPolicyExporter):
 
     def export(self, path, filename):
         self.to("cpu")
-        obs = torch.zeros(1, self.actor[0].in_features)
+        if hasattr(self.actor, "mlp"):
+            # rsl_rl >= 5.0.0 uses MLPModel
+            in_features = self.actor.mlp[0].in_features
+        else:
+            in_features = self.actor[0].in_features
+            
+        obs = torch.zeros(1, in_features)
         time_step = torch.zeros(1, 1)
         torch.onnx.export(
             self,
