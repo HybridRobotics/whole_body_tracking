@@ -11,6 +11,11 @@
 [[Arxiv]](https://arxiv.org/abs/2508.08241)
 [[Video]](https://youtu.be/RS_MtKVIAzY)
 
+> [!IMPORTANT]
+> This repository is retired and no longer maintained. BeyondMimic motion tracking lives on in
+> [mjlab](https://github.com/mujocolab/mjlab), an Isaac Lab-style manager API powered by MuJoCo-Warp. See the
+> [tracking task](https://github.com/mujocolab/mjlab/tree/main/src/mjlab/tasks/tracking) for the implementation.
+
 ## Overview
 
 BeyondMimic is a versatile humanoid control framework that provides highly dynamic motion tracking with the
@@ -22,10 +27,6 @@ train any sim-to-real-ready motion in the LAFAN1 dataset, without tuning any par
 
 For sim-to-sim and sim-to-real deployment, please refer to
 the [motion_tracking_controller](https://github.com/HybridRobotics/motion_tracking_controller).
-
-### Alternative Implementations
-
-- There is an alternative reproduction of BeyondMimic in [mjlab](https://github.com/mujocolab/mjlab), a new Isaac Lab-style manager API powered by MuJoCo-Warp for RL and robotics research. See the implementation [here](https://github.com/mujocolab/mjlab/blob/main/src/mjlab/tasks/tracking/tracking_env_cfg.py).
 
 ## Installation
 
